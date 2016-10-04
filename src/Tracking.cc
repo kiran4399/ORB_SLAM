@@ -20,6 +20,7 @@
 
 #include "Tracking.h"
 #include<ros/ros.h>
+#include <ardrone_autonomy/Navdata.h>
 #include <cv_bridge/cv_bridge.h>
 
 #include<opencv2/opencv.hpp>
@@ -160,12 +161,22 @@ void Tracking::SetKeyFrameDatabase(KeyFrameDatabase *pKFDB)
 void Tracking::Run()
 {
     ros::NodeHandle nodeHandler;
-    ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &Tracking::GrabImage, this);
+    camera_channel = nodeHandler.resolveName("/camera/image_raw");
+    navdata_channel = nodeHandler.resolveName("ardrone/navdata");
+
+    ros::Subscriber sub = nodeHandler.subscribe(camera_channel, 1, &Tracking::GrabImage, this);
+    ros::Subscriber navdata_sub = nodeHandler.subscribe(navdata_channel, 1, &Tracking::GrabImage, this);
+
+    message_filters::Subscriber<sensor_msgs::Image> camera_sub(nodeHandler, camera_channel, 1);
+    message_filters::Subscriber<ardrone_autonomy::Navdata> navdata_sub(nodeHandler, navdata_channel, 1);
+
+    TimeSynchronizer<sensor_msgs::Image, ardrone_autonomy::Navdata> sync(sub, navdata_sub, 1);
+    sync.registerCallback(boost::bind(&GrabImage, _1, _2));
 
     ros::spin();
 }
 
-void Tracking::GrabImage(const sensor_msgs::ImageConstPtr& msg)
+void Tracking::GrabImage(const sensor_msgs::ImageConstPtr& msg, const ardrone_autonomy::NavdataConstPtr& navdataPtr)
 {
 
     cv::Mat im;
@@ -300,6 +311,23 @@ void Tracking::GrabImage(const sensor_msgs::ImageConstPtr& msg)
     // Update drawer
     mpFramePublisher->Update(this);
 
+
+    /* Using x-y-z and r-p-y of the ORB-SLAM only
+    if(!mCurrentFrame.mTcw.empty())
+    {
+        cv::Mat Rwc = mCurrentFrame.mTcw.rowRange(0,3).colRange(0,3).t();
+        cv::Mat twc = -Rwc*mCurrentFrame.mTcw.rowRange(0,3).col(3);
+        tf::Matrix3x3 M(Rwc.at<float>(0,0),Rwc.at<float>(0,1),Rwc.at<float>(0,2),
+                        Rwc.at<float>(1,0),Rwc.at<float>(1,1),Rwc.at<float>(1,2),
+                        Rwc.at<float>(2,0),Rwc.at<float>(2,1),Rwc.at<float>(2,2));
+        tf::Vector3 V(twc.at<float>(0), twc.at<float>(1), twc.at<float>(2));
+
+        tf::Transform tfTcw(M,V);
+
+        mTfBr.sendTransform(tf::StampedTransform(tfTcw,ros::Time::now(), "ORB_SLAM/World", "ORB_SLAM/Camera"));
+    }*/
+
+    // Convert roll-pitch-yaw angles from navdat to rotaion matrix and use it as fused tracking
     if(!mCurrentFrame.mTcw.empty())
     {
         cv::Mat Rwc = mCurrentFrame.mTcw.rowRange(0,3).colRange(0,3).t();
@@ -313,6 +341,12 @@ void Tracking::GrabImage(const sensor_msgs::ImageConstPtr& msg)
 
         mTfBr.sendTransform(tf::StampedTransform(tfTcw,ros::Time::now(), "ORB_SLAM/World", "ORB_SLAM/Camera"));
     }
+
+}
+
+void Tracking::GrabImage(const ardrone_autonomy::NavdataConstPtr navdataPtr){
+
+
 
 }
 
